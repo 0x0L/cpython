@@ -841,12 +841,18 @@ match_keys(PyThreadState *tstate, PyObject *map, PyObject *keys)
     PyObject *seen = NULL;
     PyObject *dummy = NULL;
     PyObject *values = NULL;
+    PyObject *get_name = NULL;
+    PyObject *get = NULL;
     // We use the two argument form of map.get(key, default) for two reasons:
     // - Atomically check for a key and get its value without error handling.
     // - Don't cause key creation or resizing in dict subclasses like
     //   collections.defaultdict that define __missing__ (or similar).
     _Py_IDENTIFIER(get);
-    PyObject *get = _PyObject_GetAttrId(map, &PyId_get);
+    get_name = _PyUnicode_FromId(&PyId_get); // borrowed
+    if (get_name == NULL) {
+        return NULL;
+    }
+    int meth_found = _PyObject_GetMethod(map, get_name, &get);
     if (get == NULL) {
         goto fail;
     }
@@ -859,7 +865,7 @@ match_keys(PyThreadState *tstate, PyObject *map, PyObject *keys)
     if (dummy == NULL) {
         goto fail;
     }
-    values = PyList_New(0);
+    values = PyTuple_New(nkeys);
     if (values == NULL) {
         goto fail;
     }
@@ -873,7 +879,14 @@ match_keys(PyThreadState *tstate, PyObject *map, PyObject *keys)
             }
             goto fail;
         }
-        PyObject *value = PyObject_CallFunctionObjArgs(get, key, dummy, NULL);
+        PyObject *args[] = { map, key, dummy };
+        PyObject *value = NULL;
+        if (meth_found) {
+            value = PyObject_Vectorcall(get, args, 3, NULL);
+        }
+        else {
+            value = PyObject_Vectorcall(get, &args[1], 2, NULL);
+        }
         if (value == NULL) {
             goto fail;
         }
@@ -886,10 +899,8 @@ match_keys(PyThreadState *tstate, PyObject *map, PyObject *keys)
             values = Py_None;
             goto done;
         }
-        PyList_Append(values, value);
-        Py_DECREF(value);
+        PyTuple_SET_ITEM(values, i, value);
     }
-    Py_SETREF(values, PyList_AsTuple(values));
     // Success:
 done:
     Py_DECREF(get);
@@ -4485,6 +4496,7 @@ check_eval_breaker:
         }
 
         TARGET(LOAD_METHOD_MODULE): {
+            /* LOAD_METHOD, for module methods */
             assert(cframe.use_tracing == 0);
             PyObject *owner = TOP();
             PyObject *res;
@@ -4504,15 +4516,9 @@ check_eval_breaker:
             _PyObjectCache *cache2 = &caches[-2].obj;
 
             PyObject *cls = TOP();
-            PyTypeObject *cls_type = Py_TYPE(cls);
-            assert(cls_type->tp_dictoffset > 0);
-            PyObject *dict = *(PyObject **) ((char *)cls + cls_type->tp_dictoffset);
-            // Don't care if no dict -- tp_version_tag should catch anything wrong.
-            DEOPT_IF(dict != NULL && ((PyDictObject *)dict)->ma_keys->dk_version !=
-                cache1->dk_version_or_hint, LOAD_METHOD);
+            DEOPT_IF(!PyType_Check(cls), LOAD_METHOD);
             DEOPT_IF(((PyTypeObject *)cls)->tp_version_tag != cache1->tp_version,
                 LOAD_METHOD);
-            assert(cache1->dk_version_or_hint != 0);
             assert(cache1->tp_version != 0);
 
             STAT_INC(LOAD_METHOD, hit);
