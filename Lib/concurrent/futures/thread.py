@@ -38,9 +38,7 @@ threading._register_atexit(_python_exit)
 
 # At fork, reinitialize the `_global_shutdown_lock` lock in the child process
 if hasattr(os, 'register_at_fork'):
-    os.register_at_fork(before=_global_shutdown_lock.acquire,
-                        after_in_child=_global_shutdown_lock._at_fork_reinit,
-                        after_in_parent=_global_shutdown_lock.release)
+    os.register_at_fork(after_in_child=_global_shutdown_lock._at_fork_reinit)
 
 
 class _WorkItem(object):
