@@ -913,17 +913,12 @@ class ThreadPoolExecutorTest(ThreadPoolMixin, ExecutorTest, BaseTestCase):
 
     @unittest.skipUnless(hasattr(os, 'register_at_fork'), 'need os.register_at_fork')
     def test_hang_global_shutdown_lock(self):
-        # bpo-45021: _global_shutdown_lock should be reinitialized in the child
-        # process, otherwise it will never exit
-        def submit(pool):
-            pool.submit(submit, pool)
-
-        with futures.ThreadPoolExecutor(1) as pool:
-            pool.submit(submit, pool)
-
-            for _ in range(50):
-                with futures.ProcessPoolExecutor(1, mp_context=get_context('fork')) as workers:
-                    workers.submit(tuple)
+        # bpo-45021: make sure _global_shutdown_lock is not acquired in children
+        from concurrent.futures.thread import _global_shutdown_lock
+        with _global_shutdown_lock:
+            ctx = get_context('fork')
+            with futures.ProcessPoolExecutor(4, mp_context=ctx) as workers:
+                r = list(workers.map(str, range(100)))
 
 
 class ProcessPoolExecutorTest(ExecutorTest):
